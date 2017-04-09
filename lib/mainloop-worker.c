@@ -190,6 +190,7 @@ main_loop_worker_thread_stop(void)
 void
 main_loop_worker_commence_to_work(void)
 {
+  scratch_buffers2_thread_periodic_maintenance();
   scratch_buffers2_reclaim_allocations();
 }
 

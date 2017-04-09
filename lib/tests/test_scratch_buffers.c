@@ -121,6 +121,47 @@ Test(scratch_buffers, local_usage_metrics_measure_allocs)
   cr_assert_eq(scratch_buffers2_get_local_allocation_bytes(), 2*DEFAULT_ALLOC_SIZE);
 }
 
+Test(scratch_buffers, stats_counters_are_updated)
+{
+  StatsCounterItem *stats_scratch_buffers_count;
+  StatsCounterItem *stats_scratch_buffers_bytes;
+  GString *str;
+
+  stats_lock();
+  stats_register_counter(0, SCS_GLOBAL, "scratch_buffers_count", NULL, SC_TYPE_STORED, &stats_scratch_buffers_count);
+  stats_register_counter(0, SCS_GLOBAL, "scratch_buffers_bytes", NULL, SC_TYPE_STORED, &stats_scratch_buffers_bytes);
+  stats_unlock();
+
+  for (gint count = 1; count <= ITERATIONS; count++)
+    {
+      str = scratch_buffers2_alloc();
+      cr_assert_not_null(str);
+
+      /* check through accessor functions */
+      cr_assert(scratch_buffers2_get_local_usage_count() == count,
+                "get_local_usage_count() not returning proper value, value=%d, expected=%d",
+                scratch_buffers2_get_local_usage_count(), count);
+
+      cr_assert(scratch_buffers2_get_local_allocation_bytes() == count * DEFAULT_ALLOC_SIZE,
+                "get_local_allocation_bytes() not returning proper value, value=%ld, expected=%ld",
+                scratch_buffers2_get_local_allocation_bytes(), count * DEFAULT_ALLOC_SIZE);
+
+      /* check through metrics */
+      cr_assert(stats_counter_get(stats_scratch_buffers_count) == count,
+                "Statistic scratch_buffers_count is not updated properly, value=%d, expected=%d",
+                stats_counter_get(stats_scratch_buffers_count), count);
+
+      /* check if byte counter is updated */
+      scratch_buffers2_thread_maintenance();
+      cr_assert_eq(stats_counter_get(stats_scratch_buffers_bytes), count * DEFAULT_ALLOC_SIZE);
+    }
+
+  stats_lock();
+  stats_unregister_counter(SCS_GLOBAL, "scratch_buffers_count", NULL, SC_TYPE_STORED, &stats_scratch_buffers_count);
+  stats_unregister_counter(SCS_GLOBAL, "scratch_buffers_bytes", NULL, SC_TYPE_STORED, &stats_scratch_buffers_bytes);
+  stats_unlock();
+}
+
 static void
 setup(void)
 {

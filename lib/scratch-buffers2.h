@@ -39,6 +39,9 @@ gint scratch_buffers2_get_global_allocation_count(void);
 gint scratch_buffers2_get_local_allocation_count(void);
 glong scratch_buffers2_get_local_allocation_bytes(void);
 gint scratch_buffers2_get_local_usage_count(void);
+void scratch_buffers2_thread_maintenance(void);
+void scratch_buffers2_thread_periodic_maintenance(void);
+
 void scratch_buffers2_thread_init(void);
 void scratch_buffers2_thread_deinit(void);
 void scratch_buffers2_global_init(void);

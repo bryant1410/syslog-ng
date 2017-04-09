@@ -24,6 +24,7 @@
 #include "scratch-buffers2.h"
 #include "tls-support.h"
 #include "stats/stats-registry.h"
+#include "timeutils.h"
 
 /*
  * scratch_buffers
@@ -78,13 +79,21 @@ TLS_BLOCK_START
 {
   GPtrArray *scratch_buffers;
   gint scratch_buffers_used;
+  glong scratch_buffers_bytes_reported;
+  time_t scratch_buffers_time_of_last_maintenance;
 }
 TLS_BLOCK_END;
 
 static StatsCounterItem *stats_scratch_buffers_count;
+static StatsCounterItem *stats_scratch_buffers_bytes;
 
 #define scratch_buffers       __tls_deref(scratch_buffers)
 #define scratch_buffers_used  __tls_deref(scratch_buffers_used)
+#define scratch_buffers_bytes_reported  __tls_deref(scratch_buffers_bytes_reported)
+#define scratch_buffers_time_of_last_maintenance  __tls_deref(scratch_buffers_time_of_last_maintenance)
+
+/* update allocation counters once every period, in seconds */
+#define SCRATCH_BUFFERS_MAINTENANCE_PERIOD 5
 
 void
 scratch_buffers2_mark(ScratchBuffersMarker *marker)
@@ -160,6 +169,40 @@ scratch_buffers2_get_local_usage_count(void)
   return scratch_buffers_used;
 }
 
+static gboolean
+_thread_maintenance_period_elapsed(void)
+{
+  if (!scratch_buffers_time_of_last_maintenance)
+    return TRUE;
+
+  if (scratch_buffers_time_of_last_maintenance - cached_g_current_time_sec() >= SCRATCH_BUFFERS_MAINTENANCE_PERIOD)
+    return TRUE;
+  return FALSE;
+}
+
+static void
+_thread_maintenance_update_time(void)
+{
+  scratch_buffers_time_of_last_maintenance = cached_g_current_time_sec();
+}
+
+void
+scratch_buffers2_thread_maintenance(void)
+{
+  glong prev_reported = scratch_buffers_bytes_reported;
+  scratch_buffers_bytes_reported = scratch_buffers2_get_local_allocation_bytes();
+  stats_counter_add(stats_scratch_buffers_bytes, -prev_reported + scratch_buffers_bytes_reported);
+}
+
+void
+scratch_buffers2_thread_periodic_maintenance(void)
+{
+  if (_thread_maintenance_period_elapsed())
+    {
+      scratch_buffers2_thread_maintenance();
+      _thread_maintenance_update_time();
+    }
+}
 
 void
 scratch_buffers2_thread_init(void)
@@ -170,12 +213,16 @@ scratch_buffers2_thread_init(void)
 void
 scratch_buffers2_thread_deinit(void)
 {
+  /* remove our values from stats */
+  stats_counter_add(stats_scratch_buffers_count, -scratch_buffers->len);
+  stats_counter_add(stats_scratch_buffers_bytes, -scratch_buffers_bytes_reported);
+
+  /* free thread local scratch buffers */
   for (int i = 0; i < scratch_buffers->len; i++)
     {
       GString *buffer = g_ptr_array_index(scratch_buffers, i);
       g_string_free(buffer, TRUE);
     }
-  stats_counter_add(stats_scratch_buffers_count, -scratch_buffers->len);
   g_ptr_array_free(scratch_buffers, TRUE);
 }
 
@@ -184,6 +231,7 @@ scratch_buffers2_global_init(void)
 {
   stats_lock();
   stats_register_counter(0, SCS_GLOBAL, "scratch_buffers_count", NULL, SC_TYPE_STORED, &stats_scratch_buffers_count);
+  stats_register_counter(0, SCS_GLOBAL, "scratch_buffers_bytes", NULL, SC_TYPE_STORED, &stats_scratch_buffers_bytes);
   stats_unlock();
 }
 
@@ -192,5 +240,6 @@ scratch_buffers2_global_deinit(void)
 {
   stats_lock();
   stats_unregister_counter(SCS_GLOBAL, "scratch_buffers_count", NULL, SC_TYPE_STORED, &stats_scratch_buffers_count);
+  stats_unregister_counter(SCS_GLOBAL, "scratch_buffers_bytes", NULL, SC_TYPE_STORED, &stats_scratch_buffers_bytes);
   stats_unlock();
 }
