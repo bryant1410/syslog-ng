@@ -81,7 +81,7 @@ TLS_BLOCK_START
 }
 TLS_BLOCK_END;
 
-static StatsCounterItem *stats_scratch_buffers;
+static StatsCounterItem *stats_scratch_buffers_count;
 
 #define scratch_buffers       __tls_deref(scratch_buffers)
 #define scratch_buffers_used  __tls_deref(scratch_buffers_used)
@@ -100,7 +100,7 @@ scratch_buffers2_alloc_and_mark(ScratchBuffersMarker *marker)
   if (scratch_buffers_used >= scratch_buffers->len)
     {
       g_ptr_array_add(scratch_buffers, g_string_sized_new(255));
-      stats_counter_inc(stats_scratch_buffers);
+      stats_counter_inc(stats_scratch_buffers_count);
     }
 
   GString *buffer = g_ptr_array_index(scratch_buffers, scratch_buffers_used);
@@ -118,7 +118,7 @@ scratch_buffers2_alloc(void)
 void
 scratch_buffers2_reclaim_allocations(void)
 {
-  scratch_buffers_used = 0;
+  scratch_buffers2_reclaim_marked(0);
 }
 
 void
@@ -126,6 +126,40 @@ scratch_buffers2_reclaim_marked(ScratchBuffersMarker marker)
 {
   scratch_buffers_used = marker;
 }
+
+/* get a snapshot of the global allocation counter, can be racy */
+gint
+scratch_buffers2_get_global_allocation_count(void)
+{
+  return stats_counter_get(stats_scratch_buffers_count);
+}
+
+/* get the number of thread-local allocations does not race */
+gint
+scratch_buffers2_get_local_allocation_count(void)
+{
+  return scratch_buffers->len;
+}
+
+glong
+scratch_buffers2_get_local_allocation_bytes(void)
+{
+  glong bytes = 0;
+
+  for (gint i = 0; i < scratch_buffers->len; i++)
+    {
+      GString *str = g_ptr_array_index(scratch_buffers, i);
+      bytes += str->allocated_len;
+    }
+  return bytes;
+}
+
+gint
+scratch_buffers2_get_local_usage_count(void)
+{
+  return scratch_buffers_used;
+}
+
 
 void
 scratch_buffers2_thread_init(void)
@@ -141,6 +175,7 @@ scratch_buffers2_thread_deinit(void)
       GString *buffer = g_ptr_array_index(scratch_buffers, i);
       g_string_free(buffer, TRUE);
     }
+  stats_counter_add(stats_scratch_buffers_count, -scratch_buffers->len);
   g_ptr_array_free(scratch_buffers, TRUE);
 }
 
@@ -148,7 +183,7 @@ void
 scratch_buffers2_global_init(void)
 {
   stats_lock();
-  stats_register_counter(0, SCS_GLOBAL, "scratch_buffers", NULL, SC_TYPE_PROCESSED, &stats_scratch_buffers);
+  stats_register_counter(0, SCS_GLOBAL, "scratch_buffers_count", NULL, SC_TYPE_STORED, &stats_scratch_buffers_count);
   stats_unlock();
 }
 
@@ -156,6 +191,6 @@ void
 scratch_buffers2_global_deinit(void)
 {
   stats_lock();
-  stats_unregister_counter(SCS_GLOBAL, "scratch_buffers", NULL, SC_TYPE_PROCESSED, &stats_scratch_buffers);
+  stats_unregister_counter(SCS_GLOBAL, "scratch_buffers_count", NULL, SC_TYPE_STORED, &stats_scratch_buffers_count);
   stats_unlock();
 }
